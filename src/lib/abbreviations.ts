@@ -89,63 +89,62 @@ export async function findAbbreviation(
     }
 
     // 1. 정확 매칭 (abbreviations 컬렉션)
+    // 인덱스 생성 부담을 줄이기 위해 orderBy를 제거하고 결과 수령 후 로컬에서 정렬합니다.
     const q = query(
         collection(db, 'abbreviations'),
-        where('inputAbbr', '==', inputAbbr),
+        where('inputAbbr', '==', trimmed),
         where('status', '==', 'active'),
-        orderBy('usageCount', 'desc'),
-        limit(10)
+        limit(20)
     );
 
-    const querySnapshot = await getDocs(q);
+    try {
+        const querySnapshot = await getDocs(q);
 
-    if (!querySnapshot.empty) {
-        let docs = querySnapshot.docs.map((d: any) => ({
-            id: d.id,
-            ...d.data() as Omit<Abbreviation, 'id'>
-        }));
+        if (!querySnapshot.empty) {
+            let docs = querySnapshot.docs.map((d: any) => ({
+                id: d.id,
+                ...d.data() as Omit<Abbreviation, 'id'>
+            }));
 
-        // 위치(전/후) 정보가 있다면 해당 정보가 포함된 항목 필터링
-        if (position) {
-            const posMatch = docs.filter((d: any) =>
-                position === '후방'
-                    ? d.productName.includes('후') || d.productName.toUpperCase().includes('REAR')
-                    : !d.productName.includes('후') && !d.productName.toUpperCase().includes('REAR')
-            );
+            // 로컬에서 최신순 정렬 (서버 측 복합 인덱스 오류 방지)
+            docs.sort((a, b) => {
+                const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.seconds || 0;
+                const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.seconds || 0;
+                return dateB - dateA;
+            });
 
-            // 위치가 일치하는 항목이 전혀 없다면, 약어표 매칭을 포기하고 아래의 유사도(제품DB) 검색으로 넘어가도록 함
-            if (posMatch.length === 0) {
-                console.log(`[findAbbreviation] Abbr found but position mismatch (${position}). Falling back to similarity search.`);
-            } else {
-                docs = posMatch;
+            // 위치(전/후) 정보가 있다면 해당 정보가 포함된 항목 필터링
+            if (position) {
+                const posMatch = docs.filter((d: any) =>
+                    position === '후방'
+                        ? d.productName.includes('후') || d.productName.toUpperCase().includes('REAR')
+                        : !d.productName.includes('후') && !d.productName.toUpperCase().includes('REAR')
+                );
 
-                // 방향(LH/RH) 정보가 있는 경우 최우선 선택
-                if (side) {
-                    const sideMatch = docs.find((d: any) =>
-                        d.productName.toUpperCase().includes(side.toUpperCase())
-                    );
-                    if (sideMatch) {
-                        return { ...sideMatch, confidence: 100 } as Abbreviation;
+                if (posMatch.length > 0) {
+                    docs = posMatch;
+
+                    if (side) {
+                        const sideMatch = docs.find((d: any) =>
+                            d.productName.toUpperCase().includes(side.toUpperCase())
+                        );
+                        if (sideMatch) return { ...sideMatch, confidence: 100 } as Abbreviation;
                     }
+                    return { ...docs[0], confidence: 100 } as Abbreviation;
                 }
-
-                return {
-                    ...docs[0],
-                    confidence: 100
-                } as Abbreviation;
             }
-        } else {
-            // 위치 정보가 없는 경우 기존 로직 유지
+
+            // 위치 정보가 없거나 필터링 후 남은 게 있다면 최우선 항목 반환
             if (side) {
                 const sideMatch = docs.find((d: any) =>
                     d.productName.toUpperCase().includes(side.toUpperCase())
                 );
-                if (sideMatch) {
-                    return { ...sideMatch, confidence: 100 } as Abbreviation;
-                }
+                if (sideMatch) return { ...sideMatch, confidence: 100 } as Abbreviation;
             }
             return { ...docs[0], confidence: 100 } as Abbreviation;
         }
+    } catch (err) {
+        console.error("[findAbbreviation] Error fetching exact match:", err);
     }
 
     // 2. 유사도 매칭 (products 컬렉션에서 검색)

@@ -32,3 +32,6 @@ dist-ssr
 
 # Vite
 *.timestamp-*
+
+# Local Netlify folder
+.netlify

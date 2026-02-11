@@ -29,7 +29,20 @@ export function parseOrderLine(line: string): ParsedItem[] {
 
     const setMatch = trimmedLine.match(/(\d+)\s*대분/i);
     const slashMatch = trimmedLine.match(/(\d+)\s*[\/\.]\s*(\d+)/);
-    const qtyMatch = trimmedLine.match(/(\d+)\s*(개|ea)?(?:\s|$)/i);
+
+    // 수량 매칭 개선: "개/ea"가 붙은 것을 최우선, 아니면 문장 끝의 숫자를 우선시
+    let qtyMatch = trimmedLine.match(/(\d+)\s*(개|ea)(?:\s|$)/i);
+    if (!qtyMatch) {
+        // 문장 끝의 숫자 또는 기호/공백 뒤의 숫자들을 찾음
+        const allNums = Array.from(trimmedLine.matchAll(/(\d+)(?:\s|$|(?=[^0-9가-힣]))/g));
+        if (allNums.length > 0) {
+            // 마지막 숫자를 수량으로 선택 (보통 모델명 뒤에 수량이 오므로)
+            qtyMatch = allNums[allNums.length - 1];
+        } else {
+            // 기본 qtyMatch (문장 중간의 숫자라도 일단 후보로 둠)
+            qtyMatch = trimmedLine.match(/(\d+)\s*(개|ea)?(?:\s|$)/i);
+        }
+    }
 
     if (setMatch) {
         const qty = parseInt(setMatch[1]);
@@ -40,19 +53,24 @@ export function parseOrderLine(line: string): ParsedItem[] {
         matchedQtyStr = slashMatch[0];
     } else if (qtyMatch) {
         const qty = parseInt(qtyMatch[1]);
-        quantities = { lh: qty, rh: qty }; // side에 따라 나중에 결정됨
+        quantities = { lh: qty, rh: qty };
         matchedQtyStr = qtyMatch[0];
     }
 
-    // 4. 제품명 추출 (수량 문자열만 제거)
+    // 4. 제품명 추출 (수량 문자열 및 방향 지시어 제거)
     let product = trimmedLine;
     if (matchedQtyStr) {
-        // 수량 문자열 제거 (한 번만)
         product = product.replace(matchedQtyStr, '').trim();
     }
 
+    // 방향 지시어 제거 (L, R, LH, RH, 운전석, 조수대 등) - 파싱에 이미 반영되었으므로 검색어에서 제외
+    const sideKeywords = ['조수대', '운전석', '조', '운', 'lh', 'rh', 'l', 'r'];
+    sideKeywords.forEach(kw => {
+        const regex = new RegExp(`(^|[^a-zA-Z가-힣])${kw}(?![a-zA-Z가-힣])`, 'gi');
+        product = product.replace(regex, '$1');
+    });
+
     // 불필요한 기호 정리 및 최종 트림 (소수점은 보존)
-    // 숫자로 된 소수점(예: 1.2)은 유지하고 다른 마침표만 제거
     product = product.replace(/\.(?!\d)/g, ' ').replace(/(?<!\d)\./g, ' ');
     product = product.replace(/[\/\(\)]/g, ' ').replace(/\s+/g, ' ').trim();
 
